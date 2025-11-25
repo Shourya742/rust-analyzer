@@ -1,10 +1,12 @@
-use std::io::{self, BufRead, Write};
-
+//! Message definition for legacy protocol message
 use paths::Utf8PathBuf;
-use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
 
-use crate::{Codec, ProcMacroKind, transport::flat::FlatTree};
+use crate::{
+    ProcMacroKind,
+    protocol::{Message, PanicMessage, ServerConfig},
+    transport::flat::FlatTree,
+};
 
 /// Represents requests sent from the client to the proc-macro-srv.
 #[derive(Debug, Serialize, Deserialize)]
@@ -24,17 +26,6 @@ pub enum Request {
     /// Sets server-specific configurations.
     /// Since [`RUST_ANALYZER_SPAN_SUPPORT`]
     SetConfig(ServerConfig),
-}
-
-/// Defines the mode used for handling span data.
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize, PartialEq, Eq)]
-pub enum SpanMode {
-    /// Default mode, where spans are identified by an ID.
-    #[default]
-    Id,
-
-    /// Rust Analyzer-specific span handling mode.
-    RustAnalyzer,
 }
 
 /// Represents responses sent from the proc-macro-srv to the client.
@@ -61,14 +52,6 @@ pub enum Response {
     ExpandMacroExtended(Result<ExpandMacroExtended, PanicMessage>),
 }
 
-/// Configuration settings for the proc-macro-srv.
-#[derive(Debug, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct ServerConfig {
-    /// Defines how span data should be handled.
-    pub span_mode: SpanMode,
-}
-
 /// Represents an extended macro expansion response, including span data mappings.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ExpandMacroExtended {
@@ -77,10 +60,6 @@ pub struct ExpandMacroExtended {
     /// Additional span data mappings.
     pub span_data_table: Vec<u32>,
 }
-
-/// Represents an error message when a macro expansion results in a panic.
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PanicMessage(pub String);
 
 /// Represents a macro expansion request sent from the client.
 #[derive(Debug, Serialize, Deserialize)]
@@ -141,19 +120,6 @@ pub struct ExpnGlobals {
 impl ExpnGlobals {
     fn skip_serializing_if(&self) -> bool {
         !self.serialize
-    }
-}
-
-pub trait Message: serde::Serialize + DeserializeOwned {
-    fn read<R: BufRead, C: Codec>(inp: &mut R, buf: &mut C::Buf) -> io::Result<Option<Self>> {
-        Ok(match C::read(inp, buf)? {
-            None => None,
-            Some(buf) => C::decode(buf)?,
-        })
-    }
-    fn write<W: Write, C: Codec>(self, out: &mut W) -> io::Result<()> {
-        let value = C::encode(&self)?;
-        C::write(out, &value)
     }
 }
 

@@ -13,9 +13,9 @@ use span::Span;
 use crate::{
     Codec, ProcMacro, ProcMacroKind, ServerError,
     process::ProcMacroServerProcess,
-    protocol::legacy::msg::{
-        ExpandMacro, ExpandMacroData, ExpnGlobals, Message, Request, Response, ServerConfig,
-        SpanMode,
+    protocol::{
+        Message, ServerConfig, SpanMode,
+        legacy::msg::{ExpandMacro, ExpandMacroData, ExpnGlobals, Request, Response},
     },
     transport::{
         codec::{json::JsonProtocol, postcard::PostcardProtocol},

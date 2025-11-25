@@ -24,7 +24,7 @@ use std::{fmt, io, sync::Arc, time::SystemTime};
 pub use crate::transport::codec::Codec;
 use crate::{
     process::ProcMacroServerProcess,
-    protocol::legacy::{self, msg::SpanMode},
+    protocol::{SpanMode, legacy},
 };
 
 /// The versions of the server protocol
@@ -37,10 +37,9 @@ pub mod version {
     /// Whether literals encode their kind as an additional u32 field and idents their rawness as a u32 field.
     pub const EXTENDED_LEAF_DATA: u32 = 5;
     pub const HASHED_AST_ID: u32 = 6;
-    pub const BIDIRECTIONAL: u32 = 7;
 
     /// Current API version of the proc-macro protocol.
-    pub const CURRENT_API_VERSION: u32 = BIDIRECTIONAL;
+    pub const CURRENT_API_VERSION: u32 = HASHED_AST_ID;
 }
 
 /// Represents different kinds of procedural macros that can be expanded by the external server.
@@ -133,7 +132,7 @@ impl ProcMacroClient {
         let process = ProcMacroServerProcess::run(
             process_path,
             env,
-            process::Protocol::Postcard { mode: SpanMode::Id },
+            process::Protocol::Bidirectional { mode: SpanMode::Id },
         )?;
         Ok(ProcMacroClient { process: Arc::new(process), path: process_path.to_owned() })
     }
@@ -242,6 +241,6 @@ impl ProcMacro {
             }
         }
 
-        legacy::expand(self, subtree, attr, env, def_site, call_site, mixed_site, current_dir)
+        self.process.expand(self, subtree, attr, env, def_site, call_site, mixed_site, current_dir)
     }
 }

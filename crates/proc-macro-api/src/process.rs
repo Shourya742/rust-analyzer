@@ -8,11 +8,12 @@ use std::{
 };
 
 use paths::AbsPath;
+use span::Span;
 use stdx::JodChild;
 
 use crate::{
-    ProcMacroKind, ServerError,
-    protocol::legacy::{self, msg::SpanMode},
+    ProcMacro, ProcMacroKind, ServerError,
+    protocol::{SpanMode, bidirectional, legacy},
     version,
 };
 
@@ -31,7 +32,7 @@ pub(crate) struct ProcMacroServerProcess {
 #[derive(Debug, Clone)]
 pub(crate) enum Protocol {
     LegacyJson { mode: SpanMode },
-    Postcard { mode: SpanMode },
+    Bidirectional { mode: SpanMode },
 }
 
 /// Maintains the state of the proc-macro server process.
@@ -56,7 +57,7 @@ impl ProcMacroServerProcess {
                 Ok(process) => process,
                 Err(e) => {
                     // fallback
-                    if matches!(protocol, Protocol::Postcard { .. }) {
+                    if matches!(protocol, Protocol::Bidirectional { .. }) {
                         // retry with json
                         return Self::run(
                             process_path,
@@ -80,7 +81,7 @@ impl ProcMacroServerProcess {
         let version = match srv.version_check() {
             Ok(v) => v,
             Err(e) => {
-                if matches!(protocol, Protocol::Postcard { .. }) {
+                if matches!(protocol, Protocol::Bidirectional { .. }) {
                     // retry with json
                     return Self::run(
                         process_path,
@@ -119,7 +120,9 @@ impl ProcMacroServerProcess {
             && let Ok(new_mode) = srv.enable_rust_analyzer_spans()
         {
             match &mut srv.protocol {
-                Protocol::Postcard { mode } | Protocol::LegacyJson { mode } => *mode = new_mode,
+                Protocol::Bidirectional { mode } | Protocol::LegacyJson { mode } => {
+                    *mode = new_mode
+                }
             };
         }
 
@@ -133,7 +136,7 @@ impl ProcMacroServerProcess {
     }
 
     pub(crate) fn use_postcard(&self) -> bool {
-        matches!(self.protocol, Protocol::Postcard { .. })
+        matches!(self.protocol, Protocol::Bidirectional { .. })
     }
 
     /// Retrieves the API version of the proc-macro server.
@@ -145,7 +148,7 @@ impl ProcMacroServerProcess {
     pub(crate) fn rust_analyzer_spans(&self) -> bool {
         match self.protocol {
             Protocol::LegacyJson { mode } => mode == SpanMode::RustAnalyzer,
-            Protocol::Postcard { mode } => mode == SpanMode::RustAnalyzer,
+            Protocol::Bidirectional { mode } => mode == SpanMode::RustAnalyzer,
         }
     }
 
@@ -153,7 +156,7 @@ impl ProcMacroServerProcess {
     fn version_check(&self) -> Result<u32, ServerError> {
         match self.protocol {
             Protocol::LegacyJson { .. } => legacy::version_check(self),
-            Protocol::Postcard { .. } => legacy::version_check(self),
+            Protocol::Bidirectional { .. } => bidirectional::version_check(self),
         }
     }
 
@@ -161,7 +164,7 @@ impl ProcMacroServerProcess {
     fn enable_rust_analyzer_spans(&self) -> Result<SpanMode, ServerError> {
         match self.protocol {
             Protocol::LegacyJson { .. } => legacy::enable_rust_analyzer_spans(self),
-            Protocol::Postcard { .. } => legacy::enable_rust_analyzer_spans(self),
+            Protocol::Bidirectional { .. } => bidirectional::enable_rust_analyzer_spans(self),
         }
     }
 
@@ -172,7 +175,7 @@ impl ProcMacroServerProcess {
     ) -> Result<Result<Vec<(String, ProcMacroKind)>, String>, ServerError> {
         match self.protocol {
             Protocol::LegacyJson { .. } => legacy::find_proc_macros(self, dylib_path),
-            Protocol::Postcard { .. } => legacy::find_proc_macros(self, dylib_path),
+            Protocol::Bidirectional { .. } => bidirectional::find_proc_macros(self, dylib_path),
         }
     }
 
@@ -231,6 +234,41 @@ impl ProcMacroServerProcess {
                     e
                 }
             })
+    }
+
+    pub(crate) fn expand(
+        &self,
+        proc_macro: &ProcMacro,
+        subtree: tt::SubtreeView<'_, Span>,
+        attr: Option<tt::SubtreeView<'_, Span>>,
+        env: Vec<(String, String)>,
+        def_site: Span,
+        call_site: Span,
+        mixed_site: Span,
+        current_dir: String,
+    ) -> Result<Result<tt::TopSubtree<Span>, String>, ServerError> {
+        match self.protocol {
+            Protocol::LegacyJson { .. } => legacy::expand(
+                proc_macro,
+                subtree,
+                attr,
+                env,
+                def_site,
+                call_site,
+                mixed_site,
+                current_dir,
+            ),
+            Protocol::Bidirectional { .. } => bidirectional::expand(
+                proc_macro,
+                subtree,
+                attr,
+                env,
+                def_site,
+                call_site,
+                mixed_site,
+                current_dir,
+            ),
+        }
     }
 }
 

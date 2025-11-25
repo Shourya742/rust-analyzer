@@ -1,7 +1,12 @@
+//! Message definition for bidirectional protocol.
 use paths::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 
-use crate::{ProcMacroKind, transport::flat::FlatTree};
+use crate::{
+    ProcMacroKind,
+    protocol::{Message, PanicMessage, ServerConfig},
+    transport::flat::FlatTree,
+};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -34,20 +39,16 @@ pub enum Response {
     ExpandMacroExtended(Result<ExpandMacroExtended, PanicMessage>),
 }
 
-#[derive(Debug, Serialize, Deserialize, Default)]
-#[serde(default)]
-pub struct ServerConfig {
-    pub span_mode: SpanMode,
+impl From<Response> for ServerMessage {
+    fn from(value: Response) -> Self {
+        ServerMessage::Response(value)
+    }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct PanicMessage(pub String);
-
-#[derive(Copy, Clone, Default, Debug, Serialize, Deserialize)]
-pub enum SpanMode {
-    #[default]
-    Id,
-    RustAnalyzer,
+impl From<Request> for ClientMessage {
+    fn from(value: Request) -> Self {
+        ClientMessage::Request(value)
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -94,3 +95,6 @@ impl ExpnGlobals {
         !self.serialize
     }
 }
+
+impl Message for ClientMessage {}
+impl Message for ServerMessage {}

@@ -1,3 +1,4 @@
+//! Task handling abstraction
 use crate::ServerError;
 
 pub trait TaskHandler {
