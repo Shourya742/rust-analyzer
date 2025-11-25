@@ -14,6 +14,7 @@
 
 mod process;
 pub mod protocol;
+pub mod task_handler;
 pub mod transport;
 
 use paths::{AbsPath, AbsPathBuf};
