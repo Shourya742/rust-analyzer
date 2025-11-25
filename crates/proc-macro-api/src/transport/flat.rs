@@ -45,7 +45,7 @@ use serde_derive::{Deserialize, Serialize};
 use span::{EditionedFileId, ErasedFileAstId, Span, SpanAnchor, SyntaxContext, TextRange};
 
 use crate::{
-    legacy_protocol::SpanId,
+    legacy::SpanId,
     version::{ENCODE_CLOSE_SPAN_VERSION, EXTENDED_LEAF_DATA},
 };
 

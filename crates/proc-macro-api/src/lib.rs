@@ -12,17 +12,19 @@
 )]
 #![allow(internal_features)]
 
-mod codec;
-mod framing;
-pub mod legacy_protocol;
 mod process;
+pub mod protocol;
+pub mod transport;
 
 use paths::{AbsPath, AbsPathBuf};
 use span::{ErasedFileAstId, FIXUP_ERASED_FILE_AST_ID_MARKER, Span};
 use std::{fmt, io, sync::Arc, time::SystemTime};
 
-pub use crate::codec::Codec;
-use crate::{legacy_protocol::SpanMode, process::ProcMacroServerProcess};
+pub use crate::transport::codec::Codec;
+use crate::{
+    process::ProcMacroServerProcess,
+    protocol::legacy::{self, msg::SpanMode},
+};
 
 /// The versions of the server protocol
 pub mod version {
@@ -238,15 +240,6 @@ impl ProcMacro {
             }
         }
 
-        legacy_protocol::expand(
-            self,
-            subtree,
-            attr,
-            env,
-            def_site,
-            call_site,
-            mixed_site,
-            current_dir,
-        )
+        legacy::expand(self, subtree, attr, env, def_site, call_site, mixed_site, current_dir)
     }
 }

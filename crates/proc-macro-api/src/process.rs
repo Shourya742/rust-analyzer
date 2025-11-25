@@ -12,7 +12,7 @@ use stdx::JodChild;
 
 use crate::{
     ProcMacroKind, ServerError,
-    legacy_protocol::{self, SpanMode},
+    protocol::legacy::{self, msg::SpanMode},
     version,
 };
 
@@ -152,16 +152,16 @@ impl ProcMacroServerProcess {
     /// Checks the API version of the running proc-macro server.
     fn version_check(&self) -> Result<u32, ServerError> {
         match self.protocol {
-            Protocol::LegacyJson { .. } => legacy_protocol::version_check(self),
-            Protocol::Postcard { .. } => legacy_protocol::version_check(self),
+            Protocol::LegacyJson { .. } => legacy::version_check(self),
+            Protocol::Postcard { .. } => legacy::version_check(self),
         }
     }
 
     /// Enable support for rust-analyzer span mode if the server supports it.
     fn enable_rust_analyzer_spans(&self) -> Result<SpanMode, ServerError> {
         match self.protocol {
-            Protocol::LegacyJson { .. } => legacy_protocol::enable_rust_analyzer_spans(self),
-            Protocol::Postcard { .. } => legacy_protocol::enable_rust_analyzer_spans(self),
+            Protocol::LegacyJson { .. } => legacy::enable_rust_analyzer_spans(self),
+            Protocol::Postcard { .. } => legacy::enable_rust_analyzer_spans(self),
         }
     }
 
@@ -171,8 +171,8 @@ impl ProcMacroServerProcess {
         dylib_path: &AbsPath,
     ) -> Result<Result<Vec<(String, ProcMacroKind)>, String>, ServerError> {
         match self.protocol {
-            Protocol::LegacyJson { .. } => legacy_protocol::find_proc_macros(self, dylib_path),
-            Protocol::Postcard { .. } => legacy_protocol::find_proc_macros(self, dylib_path),
+            Protocol::LegacyJson { .. } => legacy::find_proc_macros(self, dylib_path),
+            Protocol::Postcard { .. } => legacy::find_proc_macros(self, dylib_path),
         }
     }
 

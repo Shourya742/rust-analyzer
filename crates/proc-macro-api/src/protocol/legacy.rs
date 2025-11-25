@@ -1,8 +1,6 @@
 //! The initial proc-macro-srv protocol, soon to be deprecated.
 
-pub mod json;
 pub mod msg;
-pub mod postcard;
 
 use std::{
     io::{BufRead, Write},
@@ -13,22 +11,21 @@ use paths::AbsPath;
 use span::Span;
 
 use crate::{
-    ProcMacro, ProcMacroKind, ServerError,
-    codec::Codec,
-    legacy_protocol::{
-        json::JsonProtocol,
-        msg::{
-            ExpandMacro, ExpandMacroData, ExpnGlobals, FlatTree, Message, Request, Response,
-            ServerConfig, SpanDataIndexMap, deserialize_span_data_index_map,
-            flat::serialize_span_data_index_map,
-        },
-        postcard::PostcardProtocol,
-    },
+    Codec, ProcMacro, ProcMacroKind, ServerError,
     process::ProcMacroServerProcess,
+    protocol::legacy::msg::{
+        ExpandMacro, ExpandMacroData, ExpnGlobals, Message, Request, Response, ServerConfig,
+        SpanMode,
+    },
+    transport::{
+        codec::{json::JsonProtocol, postcard::PostcardProtocol},
+        flat::{
+            FlatTree, SpanDataIndexMap, deserialize_span_data_index_map,
+            serialize_span_data_index_map,
+        },
+    },
     version,
 };
-
-pub(crate) use crate::legacy_protocol::msg::SpanMode;
 
 /// Legacy span type, only defined here as it is still used by the proc-macro server.
 /// While rust-analyzer doesn't use this anymore at all, RustRover relies on the legacy type for

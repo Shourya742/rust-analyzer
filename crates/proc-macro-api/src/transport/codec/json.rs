@@ -3,7 +3,7 @@ use std::io::{self, BufRead, Write};
 
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::{codec::Codec, framing::Framing};
+use crate::{Codec, transport::framing::Framing};
 
 pub struct JsonProtocol;
 

@@ -1,14 +1,10 @@
-//! Defines messages for cross-process message passing based on `ndjson` wire protocol
-pub(crate) mod flat;
-pub use self::flat::*;
-
 use std::io::{self, BufRead, Write};
 
 use paths::Utf8PathBuf;
 use serde::de::DeserializeOwned;
 use serde_derive::{Deserialize, Serialize};
 
-use crate::{ProcMacroKind, codec::Codec};
+use crate::{Codec, ProcMacroKind, transport::flat::FlatTree};
 
 /// Represents requests sent from the client to the proc-macro-srv.
 #[derive(Debug, Serialize, Deserialize)]
