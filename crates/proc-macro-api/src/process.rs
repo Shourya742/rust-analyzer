@@ -8,11 +8,12 @@ use std::{
 };
 
 use paths::AbsPath;
+use span::Span;
 use stdx::JodChild;
 
 use crate::{
-    ProcMacroKind, ServerError,
-    legacy_protocol::{self, SpanMode},
+    ProcMacro, ProcMacroKind, ServerError,
+    protocol::{SpanMode, postcard, legacy_json},
     version,
 };
 
@@ -119,7 +120,9 @@ impl ProcMacroServerProcess {
             && let Ok(new_mode) = srv.enable_rust_analyzer_spans()
         {
             match &mut srv.protocol {
-                Protocol::Postcard { mode } | Protocol::LegacyJson { mode } => *mode = new_mode,
+                Protocol::Postcard { mode } | Protocol::LegacyJson { mode } => {
+                    *mode = new_mode
+                }
             };
         }
 
@@ -152,16 +155,16 @@ impl ProcMacroServerProcess {
     /// Checks the API version of the running proc-macro server.
     fn version_check(&self) -> Result<u32, ServerError> {
         match self.protocol {
-            Protocol::LegacyJson { .. } => legacy_protocol::version_check(self),
-            Protocol::Postcard { .. } => legacy_protocol::version_check(self),
+            Protocol::LegacyJson { .. } => legacy_json::version_check(self),
+            Protocol::Postcard { .. } => postcard::version_check(self),
         }
     }
 
     /// Enable support for rust-analyzer span mode if the server supports it.
     fn enable_rust_analyzer_spans(&self) -> Result<SpanMode, ServerError> {
         match self.protocol {
-            Protocol::LegacyJson { .. } => legacy_protocol::enable_rust_analyzer_spans(self),
-            Protocol::Postcard { .. } => legacy_protocol::enable_rust_analyzer_spans(self),
+            Protocol::LegacyJson { .. } => legacy_json::enable_rust_analyzer_spans(self),
+            Protocol::Postcard { .. } => postcard::enable_rust_analyzer_spans(self),
         }
     }
 
@@ -171,8 +174,8 @@ impl ProcMacroServerProcess {
         dylib_path: &AbsPath,
     ) -> Result<Result<Vec<(String, ProcMacroKind)>, String>, ServerError> {
         match self.protocol {
-            Protocol::LegacyJson { .. } => legacy_protocol::find_proc_macros(self, dylib_path),
-            Protocol::Postcard { .. } => legacy_protocol::find_proc_macros(self, dylib_path),
+            Protocol::LegacyJson { .. } => legacy_json::find_proc_macros(self, dylib_path),
+            Protocol::Postcard { .. } => postcard::find_proc_macros(self, dylib_path),
         }
     }
 
@@ -231,6 +234,41 @@ impl ProcMacroServerProcess {
                     e
                 }
             })
+    }
+
+    pub(crate) fn expand(
+        &self,
+        proc_macro: &ProcMacro,
+        subtree: tt::SubtreeView<'_, Span>,
+        attr: Option<tt::SubtreeView<'_, Span>>,
+        env: Vec<(String, String)>,
+        def_site: Span,
+        call_site: Span,
+        mixed_site: Span,
+        current_dir: String,
+    ) -> Result<Result<tt::TopSubtree<Span>, String>, ServerError> {
+        match self.protocol {
+            Protocol::LegacyJson { .. } => legacy_json::expand(
+                proc_macro,
+                subtree,
+                attr,
+                env,
+                def_site,
+                call_site,
+                mixed_site,
+                current_dir,
+            ),
+            Protocol::Postcard { .. } => postcard::expand(
+                proc_macro,
+                subtree,
+                attr,
+                env,
+                def_site,
+                call_site,
+                mixed_site,
+                current_dir,
+            ),
+        }
     }
 }
 

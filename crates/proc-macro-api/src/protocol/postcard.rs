@@ -1,8 +1,4 @@
-//! The initial proc-macro-srv protocol, soon to be deprecated.
-
-pub mod json;
-pub mod msg;
-pub mod postcard;
+//! Postcard based protocol implementations
 
 use std::{
     io::{BufRead, Write},
@@ -13,22 +9,26 @@ use paths::AbsPath;
 use span::Span;
 
 use crate::{
-    ProcMacro, ProcMacroKind, ServerError,
-    codec::Codec,
-    legacy_protocol::{
-        json::JsonProtocol,
-        msg::{
-            ExpandMacro, ExpandMacroData, ExpnGlobals, FlatTree, Message, Request, Response,
-            ServerConfig, SpanDataIndexMap, deserialize_span_data_index_map,
-            flat::serialize_span_data_index_map,
-        },
-        postcard::PostcardProtocol,
-    },
+    Codec, ProcMacro, ProcMacroKind, ServerError,
     process::ProcMacroServerProcess,
+    protocol::{
+        Message, ServerConfig, SpanMode,
+        postcard::msg::{
+            ClientMessage, ExpandMacro, ExpandMacroData, ExpnGlobals, Request, Response,
+            ServerMessage,
+        },
+    },
+    transport::{
+        codec::{json::JsonProtocol, postcard::PostcardProtocol},
+        flat::{
+            FlatTree, SpanDataIndexMap, deserialize_span_data_index_map,
+            serialize_span_data_index_map,
+        },
+    },
     version,
 };
 
-pub(crate) use crate::legacy_protocol::msg::SpanMode;
+pub mod msg;
 
 /// Legacy span type, only defined here as it is still used by the proc-macro server.
 /// While rust-analyzer doesn't use this anymore at all, RustRover relies on the legacy type for
@@ -43,11 +43,11 @@ impl std::fmt::Debug for SpanId {
 }
 
 pub(crate) fn version_check(srv: &ProcMacroServerProcess) -> Result<u32, ServerError> {
-    let request = Request::ApiVersionCheck {};
+    let request = ClientMessage::Request(Request::ApiVersionCheck {});
     let response = send_task(srv, request)?;
 
     match response {
-        Response::ApiVersionCheck(version) => Ok(version),
+        ServerMessage::Response(Response::ApiVersionCheck(version)) => Ok(version),
         _ => Err(ServerError { message: "unexpected response".to_owned(), io: None }),
     }
 }
@@ -56,11 +56,13 @@ pub(crate) fn version_check(srv: &ProcMacroServerProcess) -> Result<u32, ServerE
 pub(crate) fn enable_rust_analyzer_spans(
     srv: &ProcMacroServerProcess,
 ) -> Result<SpanMode, ServerError> {
-    let request = Request::SetConfig(ServerConfig { span_mode: SpanMode::RustAnalyzer });
+    let request = ClientMessage::Request(Request::SetConfig(ServerConfig {
+        span_mode: SpanMode::RustAnalyzer,
+    }));
     let response = send_task(srv, request)?;
 
     match response {
-        Response::SetConfig(ServerConfig { span_mode }) => Ok(span_mode),
+        ServerMessage::Response(Response::SetConfig(ServerConfig { span_mode })) => Ok(span_mode),
         _ => Err(ServerError { message: "unexpected response".to_owned(), io: None }),
     }
 }
@@ -70,12 +72,13 @@ pub(crate) fn find_proc_macros(
     srv: &ProcMacroServerProcess,
     dylib_path: &AbsPath,
 ) -> Result<Result<Vec<(String, ProcMacroKind)>, String>, ServerError> {
-    let request = Request::ListMacros { dylib_path: dylib_path.to_path_buf().into() };
+    let request =
+        ClientMessage::Request(Request::ListMacros { dylib_path: dylib_path.to_path_buf().into() });
 
     let response = send_task(srv, request)?;
 
     match response {
-        Response::ListMacros(it) => Ok(it),
+        ServerMessage::Response(Response::ListMacros(it)) => Ok(it),
         _ => Err(ServerError { message: "unexpected response".to_owned(), io: None }),
     }
 }
@@ -119,10 +122,13 @@ pub(crate) fn expand(
         current_dir: Some(current_dir),
     };
 
-    let response = send_task(&proc_macro.process, Request::ExpandMacro(Box::new(task)))?;
+    let response = send_task(
+        &proc_macro.process,
+        ClientMessage::Request(Request::ExpandMacro(Box::new(task))),
+    )?;
 
     match response {
-        Response::ExpandMacro(it) => Ok(it
+        ServerMessage::Response(Response::ExpandMacro(it)) => Ok(it
             .map(|tree| {
                 let mut expanded = FlatTree::to_subtree_resolved(tree, version, &span_data_table);
                 if proc_macro.needs_fixup_change() {
@@ -131,7 +137,7 @@ pub(crate) fn expand(
                 expanded
             })
             .map_err(|msg| msg.0)),
-        Response::ExpandMacroExtended(it) => Ok(it
+        ServerMessage::Response(Response::ExpandMacroExtended(it)) => Ok(it
             .map(|resp| {
                 let mut expanded = FlatTree::to_subtree_resolved(
                     resp.tree,
@@ -149,7 +155,10 @@ pub(crate) fn expand(
 }
 
 /// Sends a request to the proc-macro server and waits for a response.
-fn send_task(srv: &ProcMacroServerProcess, req: Request) -> Result<Response, ServerError> {
+fn send_task(
+    srv: &ProcMacroServerProcess,
+    req: ClientMessage,
+) -> Result<ServerMessage, ServerError> {
     if let Some(server_error) = srv.exited() {
         return Err(server_error.clone());
     }
@@ -165,16 +174,34 @@ fn send_task(srv: &ProcMacroServerProcess, req: Request) -> Result<Response, Ser
 fn send_request<P: Codec>(
     mut writer: &mut dyn Write,
     mut reader: &mut dyn BufRead,
-    req: Request,
+    req: ClientMessage,
     buf: &mut P::Buf,
-) -> Result<Option<Response>, ServerError> {
+) -> Result<Option<ServerMessage>, ServerError> {
     req.write::<_, P>(&mut writer).map_err(|err| ServerError {
         message: "failed to write request".into(),
         io: Some(Arc::new(err)),
     })?;
-    let res = Response::read::<_, P>(&mut reader, buf).map_err(|err| ServerError {
-        message: "failed to read response".into(),
-        io: Some(Arc::new(err)),
-    })?;
-    Ok(res)
+    loop {
+        let res = ServerMessage::read::<_, P>(&mut reader, buf).map_err(|err| ServerError {
+            message: "failed to read response".into(),
+            io: Some(Arc::new(err)),
+        })?;
+
+        match res {
+            Some(res) => match res {
+                ServerMessage::Prompt => {
+                    continue;
+                }
+                ServerMessage::Reply => {
+                    continue;
+                }
+                ServerMessage::Response(response) => {
+                    return Ok(Some(ServerMessage::Response(response)));
+                }
+            },
+            None => {
+                return Ok(None);
+            }
+        }
+    }
 }
