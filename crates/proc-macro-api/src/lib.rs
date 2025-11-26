@@ -24,7 +24,7 @@ use std::{fmt, io, sync::Arc, time::SystemTime};
 pub use crate::transport::codec::Codec;
 use crate::{
     process::ProcMacroServerProcess,
-    protocol::{SpanMode, legacy},
+    protocol::{SpanMode, legacy_json},
 };
 
 /// The versions of the server protocol
@@ -132,7 +132,7 @@ impl ProcMacroClient {
         let process = ProcMacroServerProcess::run(
             process_path,
             env,
-            process::Protocol::Bidirectional { mode: SpanMode::Id },
+            process::Protocol::Postcard { mode: SpanMode::Id },
         )?;
         Ok(ProcMacroClient { process: Arc::new(process), path: process_path.to_owned() })
     }

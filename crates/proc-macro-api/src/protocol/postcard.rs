@@ -1,4 +1,4 @@
-//! Bidirectional protocol implementations
+//! Postcard based protocol implementations
 
 use std::{
     io::{BufRead, Write},
@@ -13,7 +13,7 @@ use crate::{
     process::ProcMacroServerProcess,
     protocol::{
         Message, ServerConfig, SpanMode,
-        bidirectional::msg::{
+        postcard::msg::{
             ClientMessage, ExpandMacro, ExpandMacroData, ExpnGlobals, Request, Response,
             ServerMessage,
         },

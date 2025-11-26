@@ -1,4 +1,4 @@
-//! Message definition for bidirectional protocol.
+//! Message definition for postcard based protocol.
 use paths::Utf8PathBuf;
 use serde::{Deserialize, Serialize};
 

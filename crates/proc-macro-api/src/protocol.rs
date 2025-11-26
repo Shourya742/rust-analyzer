@@ -5,8 +5,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::Codec;
 
-pub mod bidirectional;
-pub mod legacy;
+pub mod postcard;
+pub mod legacy_json;
 
 #[derive(Debug, Serialize, Deserialize, Default)]
 #[serde(default)]

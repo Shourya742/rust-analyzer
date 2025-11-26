@@ -15,7 +15,7 @@ use crate::{
     process::ProcMacroServerProcess,
     protocol::{
         Message, ServerConfig, SpanMode,
-        legacy::msg::{ExpandMacro, ExpandMacroData, ExpnGlobals, Request, Response},
+        legacy_json::msg::{ExpandMacro, ExpandMacroData, ExpnGlobals, Request, Response},
     },
     transport::{
         codec::{json::JsonProtocol, postcard::PostcardProtocol},
