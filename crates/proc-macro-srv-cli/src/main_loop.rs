@@ -1,18 +1,20 @@
 //! The main loop of the proc-macro server.
 use proc_macro_api::{
-    Codec,
+    Codec, ProtocolFormat,
     bidirectional_protocol::msg as bidirectional,
     legacy_protocol::msg as legacy,
     transport::codec::{json::JsonProtocol, postcard::PostcardProtocol},
     version::CURRENT_API_VERSION,
 };
-use std::io::{self, BufRead, Write};
+use std::{
+    io::{self, BufRead, Write},
+    ops::Range,
+};
 
 use legacy::Message;
 
 use proc_macro_srv::{EnvSnapshot, SpanId};
 
-use crate::ProtocolFormat;
 struct SpanTrans;
 
 impl legacy::SpanTransformer for SpanTrans {
@@ -32,14 +34,13 @@ impl legacy::SpanTransformer for SpanTrans {
     }
 }
 
-pub(crate) fn run(
+pub fn run(
     stdin: &mut (dyn BufRead + Send + Sync),
     stdout: &mut (dyn Write + Send + Sync),
     format: ProtocolFormat,
 ) -> io::Result<()> {
     match format {
         ProtocolFormat::JsonLegacy => run_old::<JsonProtocol>(stdin, stdout),
-        ProtocolFormat::PostcardLegacy => run_old::<PostcardProtocol>(stdin, stdout),
         ProtocolFormat::BidirectionalPostcardPrototype => {
             run_new::<PostcardProtocol>(stdin, stdout)
         }
@@ -238,6 +239,23 @@ impl<C: Codec> proc_macro_srv::ProcMacroClientInterface for ProcMacroClientHandl
                 bidirectional::SubResponse::LineColumnResult { line, column },
             )) => Some((line, column)),
             _ => None,
+        }
+    }
+
+    fn byte_range(
+        &mut self,
+        proc_macro_srv::span::Span { range, anchor, ctx: _ }: proc_macro_srv::span::Span,
+    ) -> Range<usize> {
+        match self.roundtrip(bidirectional::SubRequest::ByteRange {
+            file_id: anchor.file_id.as_u32(),
+            ast_id: anchor.ast_id.into_raw(),
+            start: range.start().into(),
+            end: range.end().into(),
+        }) {
+            Some(bidirectional::BidirectionalMessage::SubResponse(
+                bidirectional::SubResponse::ByteRangeResult { range },
+            )) => range,
+            _ => Range { start: range.start().into(), end: range.end().into() },
         }
     }
 }

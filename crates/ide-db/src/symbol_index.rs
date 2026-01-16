@@ -35,6 +35,7 @@ use hir::{
     import_map::{AssocSearchMode, SearchMode},
     symbols::{FileSymbol, SymbolCollector},
 };
+use itertools::Itertools;
 use rayon::prelude::*;
 use salsa::Update;
 
@@ -218,15 +219,16 @@ pub fn crate_symbols(db: &dyn HirDatabase, krate: Crate) -> Box<[&SymbolIndex<'_
 // | Editor  | Shortcut |
 // |---------|-----------|
 // | VS Code | <kbd>Ctrl+T</kbd>
-pub fn world_symbols(db: &RootDatabase, query: Query) -> Vec<FileSymbol<'_>> {
+pub fn world_symbols(db: &RootDatabase, mut query: Query) -> Vec<FileSymbol<'_>> {
     let _p = tracing::info_span!("world_symbols", query = ?query.query).entered();
 
-    if query.is_crate_search() {
-        return search_crates(db, &query);
-    }
-
-    // If we have a path filter, resolve it to target modules
-    let indices: Vec<_> = if !query.path_filter.is_empty() {
+    // Search for crates by name (handles "::" and "::foo" queries)
+    let indices: Vec<_> = if query.is_crate_search() {
+        query.only_types = false;
+        vec![SymbolIndex::extern_prelude_symbols(db)]
+        // If we have a path filter, resolve it to target modules
+    } else if !query.path_filter.is_empty() {
+        query.only_types = false;
         let target_modules = resolve_path_to_modules(
             db,
             &query.path_filter,
@@ -258,49 +260,20 @@ pub fn world_symbols(db: &RootDatabase, query: Query) -> Vec<FileSymbol<'_>> {
         crates
             .par_iter()
             .for_each_with(db.clone(), |snap, &krate| _ = crate_symbols(snap, krate.into()));
-        crates.into_iter().flat_map(|krate| Vec::from(crate_symbols(db, krate.into()))).collect()
+        crates
+            .into_iter()
+            .flat_map(|krate| Vec::from(crate_symbols(db, krate.into())))
+            .chain(std::iter::once(SymbolIndex::extern_prelude_symbols(db)))
+            .collect()
     };
 
     let mut res = vec![];
 
     // Normal search: use FST to match item name
-    query.search::<()>(&indices, |f| {
+    query.search::<()>(db, &indices, |f| {
         res.push(f.clone());
         ControlFlow::Continue(())
     });
-
-    res
-}
-
-/// Search for crates by name (handles "::" and "::foo" queries)
-fn search_crates<'db>(db: &'db RootDatabase, query: &Query) -> Vec<FileSymbol<'db>> {
-    let mut res = vec![];
-
-    for krate in Crate::all(db) {
-        let Some(display_name) = krate.display_name(db) else { continue };
-        let crate_name = display_name.crate_name().as_str();
-
-        // If query is empty (sole "::"), return all crates
-        // Otherwise, fuzzy match the crate name
-        let matches = if query.query.is_empty() {
-            true
-        } else {
-            query.mode.check(&query.query, query.case_sensitive, crate_name)
-        };
-
-        if matches {
-            // Get the crate root module's symbol index and find the root module symbol
-            let root_module = krate.root_module(db);
-            let index = SymbolIndex::module_symbols(db, root_module);
-            // Find the module symbol itself (representing the crate)
-            for symbol in index.symbols.iter() {
-                if matches!(symbol.def, hir::ModuleDef::Module(m) if m == root_module) {
-                    res.push(symbol.clone());
-                    break;
-                }
-            }
-        }
-    }
 
     res
 }
@@ -339,11 +312,11 @@ fn resolve_path_to_modules(
 
     // If anchor_to_crate is true, first segment MUST be a crate name
     // If anchor_to_crate is false, first segment could be a crate OR a module in local crates
-    let mut candidate_modules: Vec<Module> = vec![];
+    let mut candidate_modules: Vec<(Module, bool)> = vec![];
 
     // Add crate root modules for matching crates
     for krate in matching_crates {
-        candidate_modules.push(krate.root_module(db));
+        candidate_modules.push((krate.root_module(db), krate.origin(db).is_local()));
     }
 
     // If not anchored to crate, also search for modules matching first segment in local crates
@@ -355,7 +328,7 @@ fn resolve_path_to_modules(
                     if let Some(name) = child.name(db)
                         && names_match(name.as_str(), first_segment)
                     {
-                        candidate_modules.push(child);
+                        candidate_modules.push((child, true));
                     }
                 }
             }
@@ -366,11 +339,14 @@ fn resolve_path_to_modules(
     for segment in rest_segments {
         candidate_modules = candidate_modules
             .into_iter()
-            .flat_map(|module| {
-                module.children(db).filter(|child| {
-                    child.name(db).is_some_and(|name| names_match(name.as_str(), segment))
-                })
+            .flat_map(|(module, local)| {
+                module
+                    .modules_in_scope(db, !local)
+                    .into_iter()
+                    .filter(|(name, _)| names_match(name.as_str(), segment))
+                    .map(move |(_, module)| (module, local))
             })
+            .unique()
             .collect();
 
         if candidate_modules.is_empty() {
@@ -378,7 +354,7 @@ fn resolve_path_to_modules(
         }
     }
 
-    candidate_modules
+    candidate_modules.into_iter().map(|(module, _)| module).collect()
 }
 
 #[derive(Default)]
@@ -451,6 +427,33 @@ impl<'db> SymbolIndex<'db> {
         }
 
         module_symbols(db, InternedModuleId::new(db, hir::ModuleId::from(module)))
+    }
+
+    /// The symbol index for all extern prelude crates.
+    pub fn extern_prelude_symbols(db: &dyn HirDatabase) -> &SymbolIndex<'_> {
+        #[salsa::tracked(returns(ref))]
+        fn extern_prelude_symbols<'db>(db: &'db dyn HirDatabase) -> SymbolIndex<'db> {
+            let _p = tracing::info_span!("extern_prelude_symbols").entered();
+
+            // We call this without attaching because this runs in parallel, so we need to attach here.
+            hir::attach_db(db, || {
+                let mut collector = SymbolCollector::new(db, false);
+
+                for krate in Crate::all(db) {
+                    if krate
+                        .display_name(db)
+                        .is_none_or(|name| name.canonical_name().as_str() == "build-script-build")
+                    {
+                        continue;
+                    }
+                    collector.push_crate_root(krate);
+                }
+
+                SymbolIndex::new(collector.finish())
+            })
+        }
+
+        extern_prelude_symbols(db)
     }
 }
 
@@ -555,6 +558,7 @@ impl Query {
     /// Search symbols in the given indices.
     pub(crate) fn search<'db, T>(
         &self,
+        db: &'db RootDatabase,
         indices: &[&'db SymbolIndex<'db>],
         cb: impl FnMut(&'db FileSymbol<'db>) -> ControlFlow<T>,
     ) -> Option<T> {
@@ -568,7 +572,7 @@ impl Query {
                 for index in indices.iter() {
                     op = op.add(index.map.search(&automaton));
                 }
-                self.search_maps(indices, op.union(), cb)
+                self.search_maps(db, indices, op.union(), cb)
             }
             SearchMode::Fuzzy => {
                 let automaton = fst::automaton::Subsequence::new(&self.lowercased);
@@ -576,7 +580,7 @@ impl Query {
                 for index in indices.iter() {
                     op = op.add(index.map.search(&automaton));
                 }
-                self.search_maps(indices, op.union(), cb)
+                self.search_maps(db, indices, op.union(), cb)
             }
             SearchMode::Prefix => {
                 let automaton = fst::automaton::Str::new(&self.lowercased).starts_with();
@@ -584,13 +588,14 @@ impl Query {
                 for index in indices.iter() {
                     op = op.add(index.map.search(&automaton));
                 }
-                self.search_maps(indices, op.union(), cb)
+                self.search_maps(db, indices, op.union(), cb)
             }
         }
     }
 
     fn search_maps<'db, T>(
         &self,
+        db: &'db RootDatabase,
         indices: &[&'db SymbolIndex<'db>],
         mut stream: fst::map::Union<'_>,
         mut cb: impl FnMut(&'db FileSymbol<'db>) -> ControlFlow<T>,
@@ -598,18 +603,21 @@ impl Query {
         let ignore_underscore_prefixed = !self.query.starts_with("__");
         while let Some((_, indexed_values)) = stream.next() {
             for &IndexedValue { index, value } in indexed_values {
-                let symbol_index = &indices[index];
+                let symbol_index = indices[index];
                 let (start, end) = SymbolIndex::map_value_to_range(value);
 
                 for symbol in &symbol_index.symbols[start..end] {
                     let non_type_for_type_only_query = self.only_types
-                        && !matches!(
+                        && !(matches!(
                             symbol.def,
                             hir::ModuleDef::Adt(..)
                                 | hir::ModuleDef::TypeAlias(..)
                                 | hir::ModuleDef::BuiltinType(..)
                                 | hir::ModuleDef::Trait(..)
-                        );
+                        ) || matches!(
+                            symbol.def,
+                            hir::ModuleDef::Module(module) if module.is_crate_root(db)
+                        ));
                     if non_type_for_type_only_query || !self.matches_assoc_mode(symbol.is_assoc) {
                         continue;
                     }
@@ -833,7 +841,7 @@ pub struct Foo;
         assert_eq!(item, "foo");
         assert!(anchor);
 
-        // Trailing :: (module browsing)
+        // Trailing ::
         let (path, item, anchor) = Query::parse_path_query("foo::");
         assert_eq!(path, vec!["foo"]);
         assert_eq!(item, "");
@@ -903,7 +911,7 @@ pub mod nested {
     }
 
     #[test]
-    fn test_module_browsing() {
+    fn test_path_search_module() {
         let (mut db, _) = RootDatabase::with_many_files(
             r#"
 //- /lib.rs crate:main
@@ -1060,20 +1068,11 @@ pub fn root_fn() {}
         let names: Vec<_> = symbols.iter().map(|s| s.name.as_str()).collect();
         assert!(names.contains(&"RootItem"), "Expected RootItem at crate root in {:?}", names);
 
-        // Browse crate root
         let query = Query::new("mylib::".to_owned());
         let symbols = world_symbols(&db, query);
         let names: Vec<_> = symbols.iter().map(|s| s.name.as_str()).collect();
-        assert!(
-            names.contains(&"RootItem"),
-            "Expected RootItem when browsing crate root in {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"root_fn"),
-            "Expected root_fn when browsing crate root in {:?}",
-            names
-        );
+        assert!(names.contains(&"RootItem"), "Expected RootItem {:?}", names);
+        assert!(names.contains(&"root_fn"), "Expected root_fn {:?}", names);
     }
 
     #[test]
@@ -1156,5 +1155,63 @@ pub struct FooStruct;
         let query = Query::new("::nonexistent".to_owned());
         let symbols = world_symbols(&db, query);
         assert!(symbols.is_empty(), "Expected empty results for non-matching crate pattern");
+    }
+
+    #[test]
+    fn test_path_search_with_use_reexport() {
+        // Test that module resolution works for `use` items (re-exports), not just `mod` items
+        let (mut db, _) = RootDatabase::with_many_files(
+            r#"
+//- /lib.rs crate:main
+mod inner;
+pub use inner::nested;
+
+//- /inner.rs
+pub mod nested {
+    pub struct NestedStruct;
+    pub fn nested_fn() {}
+}
+"#,
+        );
+
+        let mut local_roots = FxHashSet::default();
+        local_roots.insert(WORKSPACE);
+        LocalRoots::get(&db).set_roots(&mut db).to(local_roots);
+
+        // Search via the re-exported path (main::nested::NestedStruct)
+        // This should work because `nested` is in scope via `pub use inner::nested`
+        let query = Query::new("main::nested::NestedStruct".to_owned());
+        let symbols = world_symbols(&db, query);
+        let names: Vec<_> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"NestedStruct"),
+            "Expected NestedStruct via re-exported path in {:?}",
+            names
+        );
+
+        // Also verify the original path still works
+        let query = Query::new("main::inner::nested::NestedStruct".to_owned());
+        let symbols = world_symbols(&db, query);
+        let names: Vec<_> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"NestedStruct"),
+            "Expected NestedStruct via original path in {:?}",
+            names
+        );
+
+        // Browse the re-exported module
+        let query = Query::new("main::nested::".to_owned());
+        let symbols = world_symbols(&db, query);
+        let names: Vec<_> = symbols.iter().map(|s| s.name.as_str()).collect();
+        assert!(
+            names.contains(&"NestedStruct"),
+            "Expected NestedStruct when browsing re-exported module in {:?}",
+            names
+        );
+        assert!(
+            names.contains(&"nested_fn"),
+            "Expected nested_fn when browsing re-exported module in {:?}",
+            names
+        );
     }
 }

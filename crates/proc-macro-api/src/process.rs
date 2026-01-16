@@ -1,10 +1,14 @@
 //! Handle process life-time and message passing for proc-macro client
 
 use std::{
+    fmt::Debug,
     io::{self, BufRead, BufReader, Read, Write},
     panic::AssertUnwindSafe,
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex, OnceLock},
+    sync::{
+        Arc, Mutex, OnceLock,
+        atomic::{AtomicU32, Ordering},
+    },
 };
 
 use paths::AbsPath;
@@ -28,6 +32,7 @@ pub(crate) struct ProcMacroServerProcess {
     protocol: Protocol,
     /// Populated when the server exits.
     exited: OnceLock<AssertUnwindSafe<ServerError>>,
+    active: AtomicU32,
 }
 
 impl std::fmt::Debug for ProcMacroServerProcess {
@@ -43,7 +48,6 @@ impl std::fmt::Debug for ProcMacroServerProcess {
 #[derive(Debug, Clone)]
 pub(crate) enum Protocol {
     LegacyJson { mode: SpanMode },
-    LegacyPostcard { mode: SpanMode },
     BidirectionalPostcardPrototype { mode: SpanMode },
 }
 
@@ -75,7 +79,7 @@ impl ProcessExit for Process {
 }
 
 /// Maintains the state of the proc-macro server process.
-struct ProcessSrvState {
+pub(crate) struct ProcessSrvState {
     process: Box<dyn ProcessExit>,
     stdin: Box<dyn Write + Send + Sync>,
     stdout: Box<dyn BufRead + Send + Sync>,
@@ -136,7 +140,6 @@ impl ProcMacroServerProcess {
         {
             &[
                 Some(ProtocolFormat::BidirectionalPostcardPrototype),
-                Some(ProtocolFormat::PostcardLegacy),
                 Some(ProtocolFormat::JsonLegacy),
             ]
         } else {
@@ -155,19 +158,17 @@ impl ProcMacroServerProcess {
                         Some(ProtocolFormat::BidirectionalPostcardPrototype) => {
                             Protocol::BidirectionalPostcardPrototype { mode: SpanMode::Id }
                         }
-                        Some(ProtocolFormat::PostcardLegacy) => {
-                            Protocol::LegacyPostcard { mode: SpanMode::Id }
-                        }
                         Some(ProtocolFormat::JsonLegacy) | None => {
                             Protocol::LegacyJson { mode: SpanMode::Id }
                         }
                     },
                     exited: OnceLock::new(),
+                    active: AtomicU32::new(0),
                 })
             };
             let mut srv = create_srv()?;
             tracing::info!("sending proc-macro server version check");
-            match srv.version_check(Some(&mut reject_subrequests)) {
+            match srv.version_check(Some(&reject_subrequests)) {
                 Ok(v) if v > version::CURRENT_API_VERSION => {
                     let process_version = binary_server_version();
                     err = Some(io::Error::other(format!(
@@ -181,11 +182,10 @@ impl ProcMacroServerProcess {
                     srv.version = v;
                     if srv.version >= version::RUST_ANALYZER_SPAN_SUPPORT
                         && let Ok(new_mode) =
-                            srv.enable_rust_analyzer_spans(Some(&mut reject_subrequests))
+                            srv.enable_rust_analyzer_spans(Some(&reject_subrequests))
                     {
                         match &mut srv.protocol {
                             Protocol::LegacyJson { mode }
-                            | Protocol::LegacyPostcard { mode }
                             | Protocol::BidirectionalPostcardPrototype { mode } => *mode = new_mode,
                         }
                     }
@@ -203,13 +203,25 @@ impl ProcMacroServerProcess {
         Err(err.unwrap())
     }
 
+    /// Finds proc-macros in a given dynamic library.
+    pub(crate) fn find_proc_macros(
+        &self,
+        dylib_path: &AbsPath,
+        callback: Option<SubCallback<'_>>,
+    ) -> Result<Result<Vec<(String, ProcMacroKind)>, String>, ServerError> {
+        match self.protocol {
+            Protocol::LegacyJson { .. } => legacy_protocol::find_proc_macros(self, dylib_path),
+
+            Protocol::BidirectionalPostcardPrototype { .. } => {
+                let cb = callback.expect("callback required for bidirectional protocol");
+                bidirectional_protocol::find_proc_macros(self, dylib_path, cb)
+            }
+        }
+    }
+
     /// Returns the server error if the process has exited.
     pub(crate) fn exited(&self) -> Option<&ServerError> {
         self.exited.get().map(|it| &it.0)
-    }
-
-    pub(crate) fn use_postcard(&self) -> bool {
-        matches!(self.protocol, Protocol::LegacyPostcard { .. })
     }
 
     /// Retrieves the API version of the proc-macro server.
@@ -221,7 +233,6 @@ impl ProcMacroServerProcess {
     pub(crate) fn rust_analyzer_spans(&self) -> bool {
         match self.protocol {
             Protocol::LegacyJson { mode } => mode == SpanMode::RustAnalyzer,
-            Protocol::LegacyPostcard { mode } => mode == SpanMode::RustAnalyzer,
             Protocol::BidirectionalPostcardPrototype { mode } => mode == SpanMode::RustAnalyzer,
         }
     }
@@ -229,9 +240,7 @@ impl ProcMacroServerProcess {
     /// Checks the API version of the running proc-macro server.
     fn version_check(&self, callback: Option<SubCallback<'_>>) -> Result<u32, ServerError> {
         match self.protocol {
-            Protocol::LegacyJson { .. } | Protocol::LegacyPostcard { .. } => {
-                legacy_protocol::version_check(self)
-            }
+            Protocol::LegacyJson { .. } => legacy_protocol::version_check(self),
             Protocol::BidirectionalPostcardPrototype { .. } => {
                 let cb = callback.expect("callback required for bidirectional protocol");
                 bidirectional_protocol::version_check(self, cb)
@@ -245,29 +254,10 @@ impl ProcMacroServerProcess {
         callback: Option<SubCallback<'_>>,
     ) -> Result<SpanMode, ServerError> {
         match self.protocol {
-            Protocol::LegacyJson { .. } | Protocol::LegacyPostcard { .. } => {
-                legacy_protocol::enable_rust_analyzer_spans(self)
-            }
+            Protocol::LegacyJson { .. } => legacy_protocol::enable_rust_analyzer_spans(self),
             Protocol::BidirectionalPostcardPrototype { .. } => {
                 let cb = callback.expect("callback required for bidirectional protocol");
                 bidirectional_protocol::enable_rust_analyzer_spans(self, cb)
-            }
-        }
-    }
-
-    /// Finds proc-macros in a given dynamic library.
-    pub(crate) fn find_proc_macros(
-        &self,
-        dylib_path: &AbsPath,
-        callback: Option<SubCallback<'_>>,
-    ) -> Result<Result<Vec<(String, ProcMacroKind)>, String>, ServerError> {
-        match self.protocol {
-            Protocol::LegacyJson { .. } | Protocol::LegacyPostcard { .. } => {
-                legacy_protocol::find_proc_macros(self, dylib_path)
-            }
-            Protocol::BidirectionalPostcardPrototype { .. } => {
-                let cb = callback.expect("callback required for bidirectional protocol");
-                bidirectional_protocol::find_proc_macros(self, dylib_path, cb)
             }
         }
     }
@@ -284,21 +274,22 @@ impl ProcMacroServerProcess {
         current_dir: String,
         callback: Option<SubCallback<'_>>,
     ) -> Result<Result<tt::TopSubtree, String>, ServerError> {
-        match self.protocol {
-            Protocol::LegacyJson { .. } | Protocol::LegacyPostcard { .. } => {
-                legacy_protocol::expand(
-                    proc_macro,
-                    subtree,
-                    attr,
-                    env,
-                    def_site,
-                    call_site,
-                    mixed_site,
-                    current_dir,
-                )
-            }
+        self.active.fetch_add(1, Ordering::AcqRel);
+        let result = match self.protocol {
+            Protocol::LegacyJson { .. } => legacy_protocol::expand(
+                proc_macro,
+                self,
+                subtree,
+                attr,
+                env,
+                def_site,
+                call_site,
+                mixed_site,
+                current_dir,
+            ),
             Protocol::BidirectionalPostcardPrototype { .. } => bidirectional_protocol::expand(
                 proc_macro,
+                self,
                 subtree,
                 attr,
                 env,
@@ -308,7 +299,10 @@ impl ProcMacroServerProcess {
                 current_dir,
                 callback.expect("callback required for bidirectional protocol"),
             ),
-        }
+        };
+
+        self.active.fetch_sub(1, Ordering::AcqRel);
+        result
     }
 
     pub(crate) fn send_task<Request, Response, C: Codec>(
@@ -366,6 +360,10 @@ impl ProcMacroServerProcess {
         self.with_locked_io::<C, _>(|writer, reader, buf| {
             bidirectional_protocol::run_conversation::<C>(writer, reader, buf, initial, callback)
         })
+    }
+
+    pub(crate) fn number_of_active_req(&self) -> u32 {
+        self.active.load(Ordering::Acquire)
     }
 }
 

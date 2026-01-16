@@ -3708,7 +3708,7 @@ fn main() {
 }
 
 #[test]
-fn macro_semitransparent_hygiene() {
+fn macro_semiopaque_hygiene() {
     check_types(
         r#"
 macro_rules! m {
@@ -3981,5 +3981,19 @@ fn foo() {
             54..55 'a': i32
             51..55: expected fn() -> i32, got impl Fn() -> i32
         "#]],
+    );
+}
+
+#[test]
+fn naked_asm_returns_never() {
+    check_no_mismatches(
+        r#"
+//- minicore: asm
+
+#[unsafe(naked)]
+extern "C" fn foo() -> ! {
+    core::arch::naked_asm!("");
+}
+    "#,
     );
 }

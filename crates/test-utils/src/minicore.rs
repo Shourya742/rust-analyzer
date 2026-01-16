@@ -546,11 +546,11 @@ pub mod ptr {
     // endregion:non_null
 
     // region:addr_of
-    #[rustc_macro_transparency = "semitransparent"]
+    #[rustc_macro_transparency = "semiopaque"]
     pub macro addr_of($place:expr) {
         &raw const $place
     }
-    #[rustc_macro_transparency = "semitransparent"]
+    #[rustc_macro_transparency = "semiopaque"]
     pub macro addr_of_mut($place:expr) {
         &raw mut $place
     }
@@ -1878,6 +1878,10 @@ mod arch {
     }
     #[rustc_builtin_macro]
     pub macro global_asm("assembly template", $(operands,)* $(options($(option),*))?) {
+        /* compiler built-in */
+    }
+    #[rustc_builtin_macro]
+    pub macro naked_asm("assembly template", $(operands,)* $(options($(option),*))?) {
         /* compiler built-in */
     }
 }
