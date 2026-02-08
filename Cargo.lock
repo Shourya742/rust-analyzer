@@ -2725,6 +2725,7 @@ dependencies = [
  "either",
  "expect-test",
  "itertools 0.14.0",
+ "la-arena 0.3.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "parser",
  "rayon",
  "rowan",
@@ -3754,15 +3755,3 @@ dependencies = [
  "memchr",
  "time",
 ]
-
-[[patch.unused]]
-name = "salsa"
-version = "0.25.2"
-
-[[patch.unused]]
-name = "salsa-macro-rules"
-version = "0.25.2"
-
-[[patch.unused]]
-name = "salsa-macros"
-version = "0.25.2"

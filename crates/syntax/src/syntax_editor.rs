@@ -19,9 +19,11 @@ use crate::{SyntaxElement, SyntaxNode, SyntaxToken};
 mod edit_algo;
 mod edits;
 mod mapping;
+mod syntax_id;
 
 pub use edits::Removable;
 pub use mapping::{SyntaxMapping, SyntaxMappingBuilder};
+pub use syntax_id::{SyntaxId, SyntaxIdMap};
 
 #[derive(Debug)]
 pub struct SyntaxEditor {
