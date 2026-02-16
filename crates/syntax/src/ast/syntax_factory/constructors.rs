@@ -75,6 +75,16 @@ impl SyntaxFactory {
         make::path_from_text(text).clone_for_update()
     }
 
+    pub fn struct_(
+        &self,
+        visibility: Option<ast::Visibility>,
+        strukt_name: ast::Name,
+        generic_param_list: Option<ast::GenericParamList>,
+        field_list: ast::FieldList,
+    ) -> ast::Struct {
+        make::struct_(visibility, strukt_name, generic_param_list, field_list)
+    }
+
     pub fn expr_field(&self, receiver: ast::Expr, field: &str) -> ast::FieldExpr {
         let ast::Expr::FieldExpr(ast) =
             make::expr_field(receiver.clone(), field).clone_for_update()
