@@ -1,6 +1,7 @@
 //! Implementation of applying changes to a syntax tree.
 
 use std::{
+    borrow::Cow,
     cmp::Ordering,
     collections::VecDeque,
     ops::{Range, RangeInclusive},
@@ -194,7 +195,7 @@ pub(super) fn apply_edits(editor: SyntaxEditor) -> SyntaxEdit {
             }
             Change::Replace(SyntaxElement::Node(target), Some(SyntaxElement::Node(new_target))) => {
                 *target = tree_mutator.make_syntax_mut(target);
-                if new_target.ancestors().any(|node| node == tree_mutator.immutable) {
+                if matches!(new_target.green(), Cow::Borrowed(_)) {
                     *new_target = new_target.clone_for_update();
                 }
             }
