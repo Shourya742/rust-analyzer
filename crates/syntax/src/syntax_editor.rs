@@ -707,4 +707,19 @@ mod tests {
         let expect = expect![["(()1, ()2)"]];
         expect.assert_eq(&edit.new_root.to_string());
     }
+
+    #[test]
+    fn test_replace_with_clone_for_update_from_original_tree() {
+        let arg_list =
+            make::arg_list([make::expr_literal("1").into(), make::expr_literal("2").into()]);
+
+        let mut editor = SyntaxEditor::new(arg_list.syntax().clone());
+        let args: Vec<_> = arg_list.args().collect();
+        let replacement = args[1].syntax().clone_for_update();
+        editor.replace(args[0].syntax(), &replacement);
+
+        let edit = editor.finish();
+        let expect = expect![["(2, 2)"]];
+        expect.assert_eq(&edit.new_root.to_string());
+    }
 }
